@@ -1,0 +1,84 @@
+name: 🐉 Dragon-News — Daily Digest
+
+on:
+  schedule:
+    # Every day at 07:00 UTC (09:00 CET / 10:00 CEST when applicable)
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  daily-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare daily digest placeholder
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          YEAR="$(date -u +%Y)"
+          FILE="daily/${YEAR}/${DATE}.md"
+          mkdir -p "daily/${YEAR}"
+
+          if [ ! -f "$FILE" ]; then
+            cat > "$FILE" <<EOF
+# 🐉 Ежедневная сводка — ${DATE}
+
+> Автоматический выпуск Dragon-News. Подробная сводка по интересам проекта.
+
+## 🐉 Драконы, фэнтези и книги
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 🎨 Арт и иллюстрация
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 🤖 ИИ и технологии
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 💻 Программирование и GitHub
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 🎮 Игры
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 📱 Приложения и гаджеты
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 🌍 Важные мировые новости
+
+_Выпуск ожидает наполнения новостным сборщиком._
+
+## 🔎 Контекст дня
+
+_Будет добавлен после проверки источников._
+
+## 📚 Источники
+
+- Будут добавлены после сбора и проверки новостей.
+EOF
+          fi
+
+      - name: Commit digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add daily/
+          if git diff --cached --quiet; then
+            echo "No new digest file to commit."
+          else
+            git commit -m "🐉 Add daily news digest"
+            git push
+          fi
