@@ -41,13 +41,11 @@ jobs:
             url="${item#*|}"
             echo "===== ${category} =====" >> .cache/news/all.txt
             curl -L --fail --silent --show-error --max-time 30 "$url" \
-              | python -c 'import sys,xml.etree.ElementTree as ET,html; root=ET.parse(sys.stdin).getroot(); items=root.findall(".//item");
-          [print(f"TITLE: {html.unescape((i.findtext(\"title\") or \"\").strip())}\nDATE: {(i.findtext(\"pubDate\") or \"\").strip()}\nLINK: {(i.findtext(\"link\") or \"\").strip()}\nDESCRIPTION: {html.unescape((i.findtext(\"description\") or \"\").strip())[:1200]}\n") for i in items[:12]]' \
+              | python -c 'import sys,xml.etree.ElementTree as ET,html; root=ET.parse(sys.stdin).getroot(); items=root.findall(".//item"); [print(f"TITLE: {html.unescape((i.findtext(\"title\") or \"\").strip())}\nDATE: {(i.findtext(\"pubDate\") or \"\").strip()}\nLINK: {(i.findtext(\"link\") or \"\").strip()}\nDESCRIPTION: {html.unescape((i.findtext(\"description\") or \"\").strip())[:1200]}\n") for i in items[:12]]' \
               >> .cache/news/all.txt || echo "RSS collection failed for ${category}" >> .cache/news/all.txt
           done
 
       - name: Generate AI digest
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -58,10 +56,26 @@ jobs:
           FILE="daily/${YEAR}/${DATE}.md"
           mkdir -p "daily/${YEAR}"
 
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            cat > "$FILE" <<EOF
+# 🐉 Ежедневная сводка — ${DATE}
+
+> RSS-сбор выполнен. ИИ-сводка пока не включена: добавьте секрет \\`OPENAI_API_KEY\\` в Settings → Secrets and variables → Actions.
+
+## ⚙️ Статус автоматизации
+
+- RSS-сбор: выполнен
+- ИИ-сводка: ожидает \\`OPENAI_API_KEY\\`
+- Следующий запуск после добавления секрета создаст полноценную сводку.
+EOF
+            exit 0
+          fi
+
           python - <<'PY'
           import json, os, pathlib, urllib.request
+          from datetime import datetime, timezone
 
-          date = os.environ.get('DATE') or __import__('datetime').datetime.utcnow().strftime('%Y-%m-%d')
+          date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
           model = os.environ.get('AI_MODEL', 'gpt-5.6-luna')
           news = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
           prompt = f'''Ты — редактор ежедневного выпуска репозитория Dragon-News. Сегодня {date}.
@@ -94,14 +108,14 @@ jobs:
 ---
 '''
 
-          payload = {
-              'model': model,
-              'input': prompt,
-          }
+          payload = {'model': model, 'input': prompt}
           req = urllib.request.Request(
               'https://api.openai.com/v1/responses',
               data=json.dumps(payload).encode(),
-              headers={'Authorization': f'Bearer {os.environ["OPENAI_API_KEY"]}', 'Content-Type': 'application/json'},
+              headers={
+                  'Authorization': f'Bearer {os.environ["OPENAI_API_KEY"]}',
+                  'Content-Type': 'application/json',
+              },
               method='POST',
           )
           with urllib.request.urlopen(req, timeout=180) as r:
@@ -124,32 +138,21 @@ jobs:
           )
           PY
         env:
-          DATE: ${{ '' }}
-          FILE: ${{ '' }}
-
-      - name: Create fallback digest when AI is not configured
-        if: ${{ secrets.OPENAI_API_KEY == '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          DATE="$(date -u +%Y-%m-%d)"
-          YEAR="$(date -u +%Y)"
-          FILE="daily/${YEAR}/${DATE}.md"
-          mkdir -p "daily/${YEAR}"
-          {
-            echo "# 🐉 Ежедневная сводка — ${DATE}"
-            echo
-            echo "> RSS-сбор выполнен. Для ИИ-сводки добавьте секрет \\`OPENAI_API_KEY\\` в настройках репозитория."
-            echo
-            echo "## 📚 Источники RSS"
-            echo
-            echo 'Сырые результаты доступны только внутри workflow; после настройки API следующий запуск создаст полноценную сводку.'
-          } > "$FILE"
+          FILE: ${{ github.workspace }}/daily/${{ github.run_id }}.md
 
       - name: Commit digest
         shell: bash
         run: |
           set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          YEAR="$(date -u +%Y)"
+          TARGET="daily/${YEAR}/${DATE}.md"
+          TEMP="daily/${{ github.run_id }}.md"
+          if [ -f "$TEMP" ]; then
+            mkdir -p "daily/${YEAR}"
+            mv "$TEMP" "$TARGET"
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add daily/
