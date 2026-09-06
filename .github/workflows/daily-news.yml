@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  AI_MODEL: gpt-5.6-luna
+
 jobs:
   daily-news:
     runs-on: ubuntu-latest
@@ -16,8 +19,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare daily digest placeholder
+      - name: Collect RSS news
         shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/news
+
+          declare -a FEEDS=(
+            "dragons-fantasy|https://news.google.com/rss/search?q=dragons+fantasy+books+OR+fantasy+novels+OR+dragon+film&hl=en-US&gl=US&ceid=US:en"
+            "art|https://news.google.com/rss/search?q=dragon+art+OR+fantasy+art+OR+illustration+OR+artist&hl=en-US&gl=US&ceid=US:en"
+            "ai-tech|https://news.google.com/rss/search?q=AI+OR+artificial+intelligence+OR+technology&hl=en-US&gl=US&ceid=US:en"
+            "programming-github|https://news.google.com/rss/search?q=GitHub+OR+programming+OR+developer+tools&hl=en-US&gl=US&ceid=US:en"
+            "games|https://news.google.com/rss/search?q=games+OR+video+games+OR+RPG&hl=en-US&gl=US&ceid=US:en"
+            "gadgets-apps|https://news.google.com/rss/search?q=apps+OR+gadgets+OR+smartphones&hl=en-US&gl=US&ceid=US:en"
+            "world|https://news.google.com/rss/search?q=world+news+OR+international+news&hl=en-US&gl=US&ceid=US:en"
+          )
+
+          : > .cache/news/all.txt
+          for item in "${FEEDS[@]}"; do
+            category="${item%%|*}"
+            url="${item#*|}"
+            echo "===== ${category} =====" >> .cache/news/all.txt
+            curl -L --fail --silent --show-error --max-time 30 "$url" \
+              | python -c 'import sys,xml.etree.ElementTree as ET,html; root=ET.parse(sys.stdin).getroot(); items=root.findall(".//item");
+          [print(f"TITLE: {html.unescape((i.findtext(\"title\") or \"\").strip())}\nDATE: {(i.findtext(\"pubDate\") or \"\").strip()}\nLINK: {(i.findtext(\"link\") or \"\").strip()}\nDESCRIPTION: {html.unescape((i.findtext(\"description\") or \"\").strip())[:1200]}\n") for i in items[:12]]' \
+              >> .cache/news/all.txt || echo "RSS collection failed for ${category}" >> .cache/news/all.txt
+          done
+
+      - name: Generate AI digest
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y-%m-%d)"
@@ -25,49 +58,93 @@ jobs:
           FILE="daily/${YEAR}/${DATE}.md"
           mkdir -p "daily/${YEAR}"
 
-          if [ ! -f "$FILE" ]; then
-            cat > "$FILE" <<EOF
-# 🐉 Ежедневная сводка — ${DATE}
+          python - <<'PY'
+          import json, os, pathlib, urllib.request
 
-> Автоматический выпуск Dragon-News. Подробная сводка по интересам проекта.
+          date = os.environ.get('DATE') or __import__('datetime').datetime.utcnow().strftime('%Y-%m-%d')
+          model = os.environ.get('AI_MODEL', 'gpt-5.6-luna')
+          news = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
+          prompt = f'''Ты — редактор ежедневного выпуска репозитория Dragon-News. Сегодня {date}.
 
-## 🐉 Драконы, фэнтези и книги
+Сформируй подробную русскоязычную Markdown-сводку по свежим новостям на основе ПЕРЕДАННОГО RSS-материала.
+Категории строго такие:
+1. 🐉 Драконы, фэнтези и книги
+2. 🎨 Арт и иллюстрация
+3. 🤖 ИИ и технологии
+4. 💻 Программирование и GitHub
+5. 🎮 Игры
+6. 📱 Приложения и гаджеты
+7. 🌍 Важные мировые новости
 
-_Выпуск ожидает наполнения новостным сборщиком._
+Правила редакции:
+- Не выдумывай факты, даты, имена, цифры или ссылки.
+- Используй только новости из входного материала; если данных недостаточно, честно напиши об этом.
+- Для каждого важного пункта укажи дату, краткое содержание и почему это важно.
+- Ссылку бери только из поля LINK соответствующего материала.
+- Отделяй подтверждённые факты от контекста/анализа.
+- Не превращай слухи в факты; помечай их как слухи/неподтверждённые сообщения, если это прямо следует из материала.
+- При близких или дублирующихся публикациях объединяй их и перечисляй источники.
+- В конце добавь «🔎 Контекст дня» и «📚 Источники».
+- Сводка должна быть полезной человеку, который интересуется драконами, фэнтези, артом, ИИ, GitHub, играми и гаджетами.
+- Не используй HTML.
 
-## 🎨 Арт и иллюстрация
+Входной RSS-материал:
+---
+{news[:50000]}
+---
+'''
 
-_Выпуск ожидает наполнения новостным сборщиком._
+          payload = {
+              'model': model,
+              'input': prompt,
+          }
+          req = urllib.request.Request(
+              'https://api.openai.com/v1/responses',
+              data=json.dumps(payload).encode(),
+              headers={'Authorization': f'Bearer {os.environ["OPENAI_API_KEY"]}', 'Content-Type': 'application/json'},
+              method='POST',
+          )
+          with urllib.request.urlopen(req, timeout=180) as r:
+              data = json.load(r)
 
-## 🤖 ИИ и технологии
+          text = data.get('output_text')
+          if not text:
+              parts = []
+              for out in data.get('output', []):
+                  for c in out.get('content', []):
+                      if c.get('type') in ('output_text', 'text') and c.get('text'):
+                          parts.append(c['text'])
+              text = '\n'.join(parts).strip()
+          if not text:
+              raise SystemExit('OpenAI returned no text output')
 
-_Выпуск ожидает наполнения новостным сборщиком._
+          pathlib.Path(os.environ['FILE']).write_text(
+              f'# 🐉 Ежедневная сводка — {date}\n\n> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны ИИ.\n\n{text.strip()}\n',
+              encoding='utf-8'
+          )
+          PY
+        env:
+          DATE: ${{ '' }}
+          FILE: ${{ '' }}
 
-## 💻 Программирование и GitHub
-
-_Выпуск ожидает наполнения новостным сборщиком._
-
-## 🎮 Игры
-
-_Выпуск ожидает наполнения новостным сборщиком._
-
-## 📱 Приложения и гаджеты
-
-_Выпуск ожидает наполнения новостным сборщиком._
-
-## 🌍 Важные мировые новости
-
-_Выпуск ожидает наполнения новостным сборщиком._
-
-## 🔎 Контекст дня
-
-_Будет добавлен после проверки источников._
-
-## 📚 Источники
-
-- Будут добавлены после сбора и проверки новостей.
-EOF
-          fi
+      - name: Create fallback digest when AI is not configured
+        if: ${{ secrets.OPENAI_API_KEY == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          YEAR="$(date -u +%Y)"
+          FILE="daily/${YEAR}/${DATE}.md"
+          mkdir -p "daily/${YEAR}"
+          {
+            echo "# 🐉 Ежедневная сводка — ${DATE}"
+            echo
+            echo "> RSS-сбор выполнен. Для ИИ-сводки добавьте секрет \\`OPENAI_API_KEY\\` в настройках репозитория."
+            echo
+            echo "## 📚 Источники RSS"
+            echo
+            echo 'Сырые результаты доступны только внутри workflow; после настройки API следующий запуск создаст полноценную сводку.'
+          } > "$FILE"
 
       - name: Commit digest
         shell: bash
@@ -77,8 +154,8 @@ EOF
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add daily/
           if git diff --cached --quiet; then
-            echo "No new digest file to commit."
+            echo "No digest changes to commit."
           else
-            git commit -m "🐉 Add daily news digest"
+            git commit -m "🐉 Add daily AI news digest"
             git push
           fi
