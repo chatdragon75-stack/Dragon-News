@@ -2,7 +2,7 @@ name: 🐉 Dragon-News — Daily Digest
 
 on:
   schedule:
-    # Every day at 07:00 UTC (09:00 CET / 10:00 CEST when applicable)
+    # Every day at 07:00 UTC
     - cron: '0 7 * * *'
   workflow_dispatch:
 
@@ -24,7 +24,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache/news
-
           declare -a FEEDS=(
             "dragons-fantasy|https://news.google.com/rss/search?q=dragons+fantasy+books+OR+fantasy+novels+OR+dragon+film&hl=en-US&gl=US&ceid=US:en"
             "art|https://news.google.com/rss/search?q=dragon+art+OR+fantasy+art+OR+illustration+OR+artist&hl=en-US&gl=US&ceid=US:en"
@@ -34,7 +33,6 @@ jobs:
             "gadgets-apps|https://news.google.com/rss/search?q=apps+OR+gadgets+OR+smartphones&hl=en-US&gl=US&ceid=US:en"
             "world|https://news.google.com/rss/search?q=world+news+OR+international+news&hl=en-US&gl=US&ceid=US:en"
           )
-
           : > .cache/news/all.txt
           for item in "${FEEDS[@]}"; do
             category="${item%%|*}"
@@ -55,26 +53,14 @@ jobs:
           YEAR="$(date -u +%Y)"
           FILE="daily/${YEAR}/${DATE}.md"
           mkdir -p "daily/${YEAR}"
-
           if [ -z "${GROQ_API_KEY:-}" ]; then
-            cat > "$FILE" <<EOF
-# 🐉 Ежедневная сводка — ${DATE}
-
-> RSS-сбор выполнен. ИИ-сводка пока не включена: добавьте секрет \`GROQ_API_KEY\` в Settings → Secrets and variables → Actions.
-
-## ⚙️ Статус автоматизации
-
-- RSS-сбор: выполнен
-- ИИ-сводка: ожидает \`GROQ_API_KEY\`
-- Следующий запуск после добавления секрета создаст полноценную сводку.
-EOF
-            exit 0
+            echo "GROQ_API_KEY is not configured" >&2
+            exit 1
           fi
-
+          export FILE
           python - <<'PY'
           import json, os, pathlib, urllib.request
           from datetime import datetime, timezone
-
           date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
           model = os.environ.get('AI_MODEL', 'openai/gpt-oss-120b')
           news = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
@@ -90,41 +76,21 @@ EOF
 6. 📱 Приложения и гаджеты
 7. 🌍 Важные мировые новости
 
-Правила редакции:
-- Не выдумывай факты, даты, имена, цифры или ссылки.
-- Используй только новости из входного материала; если данных недостаточно, честно напиши об этом.
-- Для каждого важного пункта укажи дату, краткое содержание и почему это важно.
-- Ссылку бери только из поля LINK соответствующего материала.
-- Отделяй подтверждённые факты от контекста/анализа.
-- Не превращай слухи в факты; помечай их как слухи/неподтверждённые сообщения, если это прямо следует из материала.
-- При близких или дублирующихся публикациях объединяй их и перечисляй источники.
-- В конце добавь «🔎 Контекст дня» и «📚 Источники».
-- Сводка должна быть полезной человеку, который интересуется драконами, фэнтези, артом, ИИ, GitHub, играми и гаджетами.
-- Не используй HTML.
+Правила: не выдумывай факты, даты, имена, цифры или ссылки; используй только входной RSS-материал; для важных пунктов укажи дату, краткое содержание и почему это важно; ссылки бери только из LINK; отделяй факты от контекста; слухи помечай как неподтверждённые; объединяй дубликаты; в конце добавь «🔎 Контекст дня» и «📚 Источники»; не используй HTML.
 
 Входной RSS-материал:
 ---
 {news[:50000]}
 ---
 '''
-
-          payload = {
-              'model': model,
-              'input': prompt,
-              'reasoning_effort': 'medium'
-          }
+          payload = {'model': model, 'input': prompt, 'reasoning_effort': 'medium'}
           req = urllib.request.Request(
               'https://api.groq.com/openai/v1/responses',
               data=json.dumps(payload).encode(),
-              headers={
-                  'Authorization': f'Bearer {os.environ["GROQ_API_KEY"]}',
-                  'Content-Type': 'application/json',
-              },
-              method='POST',
-          )
+              headers={'Authorization': f'Bearer {os.environ["GROQ_API_KEY"]}', 'Content-Type': 'application/json'},
+              method='POST')
           with urllib.request.urlopen(req, timeout=180) as r:
               data = json.load(r)
-
           text = data.get('output_text')
           if not text:
               parts = []
@@ -135,14 +101,10 @@ EOF
               text = '\n'.join(parts).strip()
           if not text:
               raise SystemExit('Groq returned no text output')
-
           pathlib.Path(os.environ['FILE']).write_text(
               f'# 🐉 Ежедневная сводка — {date}\n\n> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны Groq AI.\n\n{text.strip()}\n',
-              encoding='utf-8'
-          )
+              encoding='utf-8')
           PY
-        env:
-          FILE: ${{ github.workspace }}/daily/${{ github.run_id }}.md
 
       - name: Commit digest
         shell: bash
@@ -151,12 +113,6 @@ EOF
           DATE="$(date -u +%Y-%m-%d)"
           YEAR="$(date -u +%Y)"
           TARGET="daily/${YEAR}/${DATE}.md"
-          TEMP="daily/${{ github.run_id }}.md"
-          if [ -f "$TEMP" ]; then
-            mkdir -p "daily/${YEAR}"
-            mv "$TEMP" "$TARGET"
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add daily/
