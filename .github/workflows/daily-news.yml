@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  AI_MODEL: gpt-5.6-luna
+  AI_MODEL: openai/gpt-oss-120b
 
 jobs:
   daily-news:
@@ -45,10 +45,10 @@ jobs:
               >> .cache/news/all.txt || echo "RSS collection failed for ${category}" >> .cache/news/all.txt
           done
 
-      - name: Generate AI digest
+      - name: Generate AI digest with Groq
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y-%m-%d)"
@@ -56,16 +56,16 @@ jobs:
           FILE="daily/${YEAR}/${DATE}.md"
           mkdir -p "daily/${YEAR}"
 
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
+          if [ -z "${GROQ_API_KEY:-}" ]; then
             cat > "$FILE" <<EOF
 # 🐉 Ежедневная сводка — ${DATE}
 
-> RSS-сбор выполнен. ИИ-сводка пока не включена: добавьте секрет \\`OPENAI_API_KEY\\` в Settings → Secrets and variables → Actions.
+> RSS-сбор выполнен. ИИ-сводка пока не включена: добавьте секрет \`GROQ_API_KEY\` в Settings → Secrets and variables → Actions.
 
 ## ⚙️ Статус автоматизации
 
 - RSS-сбор: выполнен
-- ИИ-сводка: ожидает \\`OPENAI_API_KEY\\`
+- ИИ-сводка: ожидает \`GROQ_API_KEY\`
 - Следующий запуск после добавления секрета создаст полноценную сводку.
 EOF
             exit 0
@@ -76,7 +76,7 @@ EOF
           from datetime import datetime, timezone
 
           date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-          model = os.environ.get('AI_MODEL', 'gpt-5.6-luna')
+          model = os.environ.get('AI_MODEL', 'openai/gpt-oss-120b')
           news = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
           prompt = f'''Ты — редактор ежедневного выпуска репозитория Dragon-News. Сегодня {date}.
 
@@ -108,12 +108,16 @@ EOF
 ---
 '''
 
-          payload = {'model': model, 'input': prompt}
+          payload = {
+              'model': model,
+              'input': prompt,
+              'reasoning_effort': 'medium'
+          }
           req = urllib.request.Request(
-              'https://api.openai.com/v1/responses',
+              'https://api.groq.com/openai/v1/responses',
               data=json.dumps(payload).encode(),
               headers={
-                  'Authorization': f'Bearer {os.environ["OPENAI_API_KEY"]}',
+                  'Authorization': f'Bearer {os.environ["GROQ_API_KEY"]}',
                   'Content-Type': 'application/json',
               },
               method='POST',
@@ -130,10 +134,10 @@ EOF
                           parts.append(c['text'])
               text = '\n'.join(parts).strip()
           if not text:
-              raise SystemExit('OpenAI returned no text output')
+              raise SystemExit('Groq returned no text output')
 
           pathlib.Path(os.environ['FILE']).write_text(
-              f'# 🐉 Ежедневная сводка — {date}\n\n> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны ИИ.\n\n{text.strip()}\n',
+              f'# 🐉 Ежедневная сводка — {date}\n\n> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны Groq AI.\n\n{text.strip()}\n',
               encoding='utf-8'
           )
           PY
