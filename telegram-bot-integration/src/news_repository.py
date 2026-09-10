@@ -9,6 +9,17 @@ from datetime import date
 import requests
 
 
+CATEGORIES = {
+    "dragons-fantasy": "🐉 Драконы, фэнтези и книги",
+    "art": "🎨 Арт, иллюстрации и художники",
+    "ai-tech": "🤖 ИИ и технологии",
+    "programming-github": "💻 Программирование и GitHub",
+    "games": "🎮 Игры",
+    "gadgets-apps": "📱 Приложения и гаджеты",
+    "world": "🌍 Мировые новости",
+}
+
+
 @dataclass(frozen=True)
 class NewsItem:
     title: str
@@ -16,6 +27,7 @@ class NewsItem:
     category: str
     summary: str
     url: str
+    content: str = ""
 
 
 class DragonNewsRepository:
@@ -47,15 +59,10 @@ class DragonNewsRepository:
 
     @staticmethod
     def _section(content: str, heading: str) -> str:
-        match = re.search(
-            rf"^##\s+{re.escape(heading)}\s*$([\s\S]*?)(?=^##\s+|\Z)",
-            content,
-            re.MULTILINE,
-        )
+        match = re.search(rf"^##\s+{re.escape(heading)}\s*$([\s\S]*?)(?=^##\s+|\Z)", content, re.MULTILINE)
         return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
 
     def latest_daily(self) -> tuple[str, str] | None:
-        """Return (path, content) for the newest daily digest, if one exists."""
         years = self._get_json("daily")
         year_dirs = sorted((item["name"] for item in years if item.get("type") == "dir"), reverse=True)
         for year in year_dirs:
@@ -69,8 +76,7 @@ class DragonNewsRepository:
                 return path, self._get_text(path)
         return None
 
-    def latest_articles(self, limit: int = 5) -> list[NewsItem]:
-        """Read article Markdown files from news/ and return newest dated entries."""
+    def latest_articles(self, limit: int = 5, category: str | None = None) -> list[NewsItem]:
         entries = self._get_json("news")
         items: list[NewsItem] = []
         for entry in entries:
@@ -81,20 +87,39 @@ class DragonNewsRepository:
             content = self._get_text(entry["path"])
             raw_date = self._front_matter(content, "Дата")
             try:
-                parsed_date = date.fromisoformat(raw_date)
+                date.fromisoformat(raw_date)
             except ValueError:
                 continue
-            items.append(
-                NewsItem(
-                    title=content.splitlines()[0].lstrip("# ").strip(),
-                    date=raw_date,
-                    category=self._front_matter(content, "Категория"),
-                    summary=self._section(content, "Кратко"),
-                    url=entry.get("html_url", ""),
-                )
-            )
+            item_category = self._front_matter(content, "Категория")
+            if category and item_category != category and CATEGORIES.get(category) != item_category:
+                continue
+            items.append(NewsItem(
+                title=content.splitlines()[0].lstrip("# ").strip(),
+                date=raw_date,
+                category=item_category,
+                summary=self._section(content, "Кратко"),
+                url=entry.get("html_url", ""),
+                content=content,
+            ))
         items.sort(key=lambda item: item.date, reverse=True)
         return items[:limit]
+
+    def categories(self) -> dict[str, str]:
+        return dict(CATEGORIES)
+
+    def format_article(self, item: NewsItem, max_chars: int = 3500) -> str:
+        details = self._section(item.content, "Подробности") or item.summary
+        context = self._section(item.content, "Контекст")
+        parts = [f"📰 <b>{item.title}</b>", f"📅 {item.date}"]
+        if item.category:
+            parts.append(f"🏷 {item.category}")
+        if item.summary:
+            parts.append(f"\n<b>Кратко</b>\n{item.summary}")
+        if details:
+            parts.append(f"\n<b>Подробности</b>\n{details}")
+        if context:
+            parts.append(f"\n<b>Контекст</b>\n{context}")
+        return "\n".join(parts)[:max_chars]
 
     def format_latest_daily(self, max_chars: int = 3800) -> str:
         latest = self.latest_daily()
