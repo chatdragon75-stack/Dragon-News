@@ -2,7 +2,6 @@ name: 🐉 Dragon-News — Daily Digest
 
 on:
   schedule:
-    # Every day at 07:00 UTC
     - cron: '0 7 * * *'
   workflow_dispatch:
 
@@ -24,23 +23,40 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache/news
-          declare -a FEEDS=(
-            "dragons-fantasy|https://news.google.com/rss/search?q=dragons+fantasy+books+OR+fantasy+novels+OR+dragon+film&hl=en-US&gl=US&ceid=US:en"
-            "art|https://news.google.com/rss/search?q=dragon+art+OR+fantasy+art+OR+illustration+OR+artist&hl=en-US&gl=US&ceid=US:en"
-            "ai-tech|https://news.google.com/rss/search?q=AI+OR+artificial+intelligence+OR+technology&hl=en-US&gl=US&ceid=US:en"
-            "programming-github|https://news.google.com/rss/search?q=GitHub+OR+programming+OR+developer+tools&hl=en-US&gl=US&ceid=US:en"
-            "games|https://news.google.com/rss/search?q=games+OR+video+games+OR+RPG&hl=en-US&gl=US&ceid=US:en"
-            "gadgets-apps|https://news.google.com/rss/search?q=apps+OR+gadgets+OR+smartphones&hl=en-US&gl=US&ceid=US:en"
-            "world|https://news.google.com/rss/search?q=world+news+OR+international+news&hl=en-US&gl=US&ceid=US:en"
-          )
           : > .cache/news/all.txt
-          for item in "${FEEDS[@]}"; do
+          feeds=(
+            'dragons-fantasy|https://news.google.com/rss/search?q=dragons+fantasy+books+OR+fantasy+novels+OR+dragon+film&hl=en-US&gl=US&ceid=US:en'
+            'art|https://news.google.com/rss/search?q=dragon+art+OR+fantasy+art+OR+illustration+OR+artist&hl=en-US&gl=US&ceid=US:en'
+            'ai-tech|https://news.google.com/rss/search?q=AI+OR+artificial+intelligence+OR+technology&hl=en-US&gl=US&ceid=US:en'
+            'programming-github|https://news.google.com/rss/search?q=GitHub+OR+programming+OR+developer+tools&hl=en-US&gl=US&ceid=US:en'
+            'games|https://news.google.com/rss/search?q=games+OR+video+games+OR+RPG&hl=en-US&gl=US&ceid=US:en'
+            'gadgets-apps|https://news.google.com/rss/search?q=apps+OR+gadgets+OR+smartphones&hl=en-US&gl=US&ceid=US:en'
+            'world|https://news.google.com/rss/search?q=world+news+OR+international+news&hl=en-US&gl=US&ceid=US:en'
+          )
+          for item in "${feeds[@]}"; do
             category="${item%%|*}"
             url="${item#*|}"
             echo "===== ${category} =====" >> .cache/news/all.txt
-            curl -L --fail --silent --show-error --max-time 30 "$url" \
-              | python -c 'import sys,xml.etree.ElementTree as ET,html; root=ET.parse(sys.stdin).getroot(); items=root.findall(".//item"); [print(f"TITLE: {html.unescape((i.findtext(\"title\") or \"\").strip())}\nDATE: {(i.findtext(\"pubDate\") or \"\").strip()}\nLINK: {(i.findtext(\"link\") or \"\").strip()}\nDESCRIPTION: {html.unescape((i.findtext(\"description\") or \"\").strip())[:1200]}\n") for i in items[:12]]' \
-              >> .cache/news/all.txt || echo "RSS collection failed for ${category}" >> .cache/news/all.txt
+            if curl -L --fail --silent --show-error --max-time 30 "$url" -o .cache/news/feed.xml; then
+              python - <<'PY' >> .cache/news/all.txt
+import html
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+try:
+    root = ET.parse('.cache/news/feed.xml').getroot()
+    for item in root.findall('.//item')[:12]:
+        title = html.unescape((item.findtext('title') or '').strip())
+        date = (item.findtext('pubDate') or '').strip()
+        link = (item.findtext('link') or '').strip()
+        description = html.unescape((item.findtext('description') or '').strip())[:1200]
+        print(f'TITLE: {title}\nDATE: {date}\nLINK: {link}\nDESCRIPTION: {description}\n')
+except Exception as exc:
+    print(f'RSS parse failed: {exc}')
+PY
+            else
+              echo "RSS collection failed for ${category}" >> .cache/news/all.txt
+            fi
           done
 
       - name: Generate AI digest with Groq
@@ -59,12 +75,16 @@ jobs:
           fi
           export FILE
           python - <<'PY'
-          import json, os, pathlib, urllib.request
-          from datetime import datetime, timezone
-          date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-          model = os.environ.get('AI_MODEL', 'openai/gpt-oss-120b')
-          news = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
-          prompt = f'''Ты — редактор ежедневного выпуска репозитория Dragon-News. Сегодня {date}.
+import json
+import os
+import pathlib
+import urllib.request
+from datetime import datetime, timezone
+
+DATE = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+MODEL = os.environ.get('AI_MODEL', 'openai/gpt-oss-120b')
+NEWS = pathlib.Path('.cache/news/all.txt').read_text(encoding='utf-8')
+PROMPT = f'''Ты — редактор ежедневного выпуска репозитория Dragon-News. Сегодня {DATE}.
 
 Сформируй подробную русскоязычную Markdown-сводку по свежим новостям на основе ПЕРЕДАННОГО RSS-материала.
 Категории строго такие:
@@ -80,39 +100,52 @@ jobs:
 
 Входной RSS-материал:
 ---
-{news[:50000]}
+{NEWS[:50000]}
 ---
 '''
-          payload = {'model': model, 'input': prompt, 'reasoning_effort': 'medium'}
-          req = urllib.request.Request(
-              'https://api.groq.com/openai/v1/responses',
-              data=json.dumps(payload).encode(),
-              headers={'Authorization': f'Bearer {os.environ["GROQ_API_KEY"]}', 'Content-Type': 'application/json'},
-              method='POST')
-          with urllib.request.urlopen(req, timeout=180) as r:
-              data = json.load(r)
-          text = data.get('output_text')
-          if not text:
-              parts = []
-              for out in data.get('output', []):
-                  for c in out.get('content', []):
-                      if c.get('type') in ('output_text', 'text') and c.get('text'):
-                          parts.append(c['text'])
-              text = '\n'.join(parts).strip()
-          if not text:
-              raise SystemExit('Groq returned no text output')
-          pathlib.Path(os.environ['FILE']).write_text(
-              f'# 🐉 Ежедневная сводка — {date}\n\n> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны Groq AI.\n\n{text.strip()}\n',
-              encoding='utf-8')
-          PY
+
+payload = {
+    'model': MODEL,
+    'input': PROMPT,
+    'reasoning_effort': 'medium',
+}
+request = urllib.request.Request(
+    'https://api.groq.com/openai/v1/responses',
+    data=json.dumps(payload).encode('utf-8'),
+    headers={
+        'Authorization': f'Bearer {os.environ["GROQ_API_KEY"]}',
+        'Content-Type': 'application/json',
+    },
+    method='POST',
+)
+
+with urllib.request.urlopen(request, timeout=180) as response:
+    data = json.load(response)
+
+text = data.get('output_text')
+if not text:
+    parts = []
+    for output in data.get('output', []):
+        for content in output.get('content', []):
+            if content.get('type') in ('output_text', 'text') and content.get('text'):
+                parts.append(content['text'])
+    text = '\n'.join(parts).strip()
+
+if not text:
+    raise SystemExit('Groq returned no text output')
+
+pathlib.Path(os.environ['FILE']).write_text(
+    f'# 🐉 Ежедневная сводка — {DATE}\n\n'
+    '> Автоматический выпуск Dragon-News. Новости собраны из RSS и обработаны Groq AI.\n\n'
+    f'{text.strip()}\n',
+    encoding='utf-8',
+)
+PY
 
       - name: Commit digest
         shell: bash
         run: |
           set -euo pipefail
-          DATE="$(date -u +%Y-%m-%d)"
-          YEAR="$(date -u +%Y)"
-          TARGET="daily/${YEAR}/${DATE}.md"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add daily/
