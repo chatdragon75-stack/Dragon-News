@@ -1,0 +1,48 @@
+name: 🐉 Dragon-News — Daily Telegram Digest
+
+on:
+  schedule:
+    # Fallback check after the daily digest workflow runs at 07:00 UTC.
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-daily:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Find today's digest
+        id: digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          YEAR="$(date -u +%Y)"
+          FILE="daily/${YEAR}/${DATE}.md"
+
+          if [ -f "$FILE" ]; then
+            echo "file=$FILE" >> "$GITHUB_OUTPUT"
+            echo "Today's digest found: $FILE"
+          else
+            echo "No digest for $DATE yet; nothing will be sent."
+          fi
+
+      - name: Publish today's digest to Telegram
+        if: steps.digest.outputs.file != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 telegram-bot-integration/scripts/send_telegram.py "${{ steps.digest.outputs.file }}"
