@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import sys
@@ -71,10 +72,11 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = ["📰 <b>Последние новости Dragon-News</b>"]
     for item in items:
-        category = f" · {item.category}" if item.category else ""
-        summary = f"\n{item.summary}" if item.summary else ""
-        lines.append(f"\n<b>{item.title}</b>\n📅 {item.date}{category}{summary}")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
+        title = html.escape(item.title)
+        category = f" · {html.escape(item.category)}" if item.category else ""
+        summary = f"\n{html.escape(item.summary)}" if item.summary else ""
+        lines.append(f"\n<b>{title}</b>\n📅 {html.escape(item.date)}{category}{summary}")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
