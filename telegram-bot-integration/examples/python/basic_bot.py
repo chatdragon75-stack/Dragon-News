@@ -1,25 +1,24 @@
-"""Minimal Dragon-News Telegram bot starter."""
+"""Minimal Dragon-News Telegram bot with live repository news."""
 
 from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from src.news_repository import DragonNewsRepository  # noqa: E402
 
 load_dotenv()
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -30,18 +29,18 @@ def get_token() -> str:
     return token
 
 
+def repository() -> DragonNewsRepository:
+    return DragonNewsRepository(os.getenv("DRAGON_NEWS_REPOSITORY", "chatdragon75-stack/Dragon-News"))
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
-        [
-            InlineKeyboardButton("📰 Новости", callback_data="news"),
-            InlineKeyboardButton("🐉 Драконы", callback_data="dragons"),
-        ],
-        [InlineKeyboardButton("✨ Люмендра", callback_data="lumendra")],
+        [InlineKeyboardButton("📰 Новости", callback_data="news"), InlineKeyboardButton("🐉 Драконы", callback_data="dragons")],
+        [InlineKeyboardButton("📅 Сводка", callback_data="daily"), InlineKeyboardButton("✨ Люмендра", callback_data="lumendra")],
     ]
     await update.effective_message.reply_text(
         "🐉 Добро пожаловать в Dragon-News!\n\n"
-        "Я буду присылать новости, арты, материалы о драконах "
-        "и обновления проектов.",
+        "Новости теперь читаются прямо из репозитория.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -49,67 +48,67 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "Доступные команды:\n"
-        "/start — главное меню\n"
-        "/help — помощь\n"
-        "/news — последние новости\n"
-        "/daily — ежедневная сводка\n"
-        "/dragons — энциклопедия драконов\n"
-        "/art — последние арты\n"
-        "/github — обновления GitHub\n"
-        "/lumendra — режим Люмендры"
+        "/start — главное меню\n/help — помощь\n/news — последние новости\n"
+        "/daily — ежедневная сводка\n/dragons — энциклопедия драконов\n"
+        "/art — последние арты\n/github — обновления GitHub\n/lumendra — режим Люмендры"
     )
 
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "📰 Dragon-News\n\n"
-        "Модуль чтения новостей будет подключён следующим этапом."
-    )
+    try:
+        items = repository().latest_articles(limit=5)
+    except Exception:
+        logger.exception("Failed to read Dragon-News articles")
+        await update.effective_message.reply_text("📰 Не удалось прочитать архив новостей. Попробуйте позже.")
+        return
+
+    if not items:
+        await update.effective_message.reply_text(
+            "📰 Архив новостей пока пуст.\n\n"
+            "Добавьте статьи Markdown в news/ по шаблону ARTICLE-TEMPLATE.md."
+        )
+        return
+
+    lines = ["📰 <b>Последние новости Dragon-News</b>"]
+    for item in items:
+        category = f" · {item.category}" if item.category else ""
+        summary = f"\n{item.summary}" if item.summary else ""
+        lines.append(f"\n<b>{item.title}</b>\n📅 {item.date}{category}{summary}")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "📚 Ежедневная сводка пока готовится.\n"
-        "Следующий этап — подключить архив daily/."
-    )
+    try:
+        text = repository().format_latest_daily()
+    except Exception:
+        logger.exception("Failed to read daily digest")
+        text = "📅 Не удалось прочитать ежедневную сводку. Попробуйте позже."
+    await update.effective_message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def dragons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "🐲 Энциклопедия драконов скоро будет подключена."
-    )
+    await update.effective_message.reply_text("🐲 Энциклопедия драконов скоро будет подключена.")
 
 
 async def art(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "🎨 Галерея Dragon-Art-Project будет подключена следующим этапом."
-    )
+    await update.effective_message.reply_text("🎨 Галерея Dragon-Art-Project скоро будет подключена.")
 
 
 async def github(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "💻 GitHub-интеграция будет показывать обновления Dragon-News "
-        "и Dragon-Art-Project."
-    )
+    await update.effective_message.reply_text("💻 GitHub-интеграция будет показывать обновления Dragon-News и Dragon-Art-Project.")
 
 
 async def lumendra(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "✨ Я — Люмендра, дракон знаний и историй.\n\n"
-        "AI-провайдер будет подключён отдельным модулем, "
-        "чтобы Telegram-слой оставался независимым."
+        "AI-провайдер будет подключён отдельным модулем."
     )
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-
-    handlers = {
-        "news": news,
-        "dragons": dragons,
-        "lumendra": lumendra,
-    }
+    handlers = {"news": news, "daily": daily, "dragons": dragons, "lumendra": lumendra}
     handler = handlers.get(query.data)
     if handler:
         await handler(update, context)
@@ -121,18 +120,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def main() -> None:
     application = Application.builder().token(get_token()).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("news", news))
-    application.add_handler(CommandHandler("daily", daily))
-    application.add_handler(CommandHandler("dragons", dragons))
-    application.add_handler(CommandHandler("art", art))
-    application.add_handler(CommandHandler("github", github))
-    application.add_handler(CommandHandler("lumendra", lumendra))
+    for command, handler in {
+        "start": start, "help": help_command, "news": news, "daily": daily,
+        "dragons": dragons, "art": art, "github": github, "lumendra": lumendra,
+    }.items():
+        application.add_handler(CommandHandler(command, handler))
     application.add_handler(CallbackQueryHandler(button))
     application.add_error_handler(error_handler)
-
     logger.info("Dragon-News Telegram bot is starting")
     application.run_polling()
 
