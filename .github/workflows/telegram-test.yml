@@ -1,0 +1,53 @@
+name: 🧪 Test Dragon-News Telegram Bot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN")
+          chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+          if not token or not chat_id:
+              raise SystemExit("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+
+          payload = {
+              "chat_id": chat_id,
+              "text": "🐉 <b>Тест Dragon-News</b>\n\n✅ Telegram-интеграция работает!\n\nGitHub Actions успешно подключён к Telegram-боту.",
+              "parse_mode": "HTML",
+          }
+          topic_id = os.environ.get("TELEGRAM_TOPIC_ID")
+          if topic_id:
+              payload["message_thread_id"] = int(topic_id)
+
+          request = Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urlopen(request, timeout=30) as response:
+              result = json.load(response)
+
+          if not result.get("ok"):
+              raise SystemExit(f"Telegram API error: {result}")
+
+          print("Telegram test message sent successfully.")
+          PY
