@@ -1,0 +1,57 @@
+name: 🐉 Dragon-News → Telegram
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'news/**/*.md'
+      - 'daily/**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find changed Markdown files
+        id: changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            find news daily -type f -name '*.md' \
+              ! -name 'README.md' ! -name 'ARTICLE-TEMPLATE.md' \
+              -print | sort -r | head -n 1 > changed.txt
+          else
+            git diff --name-only --diff-filter=AM "${{ github.event.before }}" "${{ github.sha }}" \
+              | grep -E '^(news|daily)/.*\.md$' \
+              | grep -vE '(^|/)README\.md$|ARTICLE-TEMPLATE\.md$' > changed.txt || true
+          fi
+          echo "Files to publish:"
+          cat changed.txt || true
+
+      - name: Publish to Telegram
+        if: hashFiles('changed.txt') != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet requests
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            echo "Publishing $file"
+            python3 telegram-bot-integration/scripts/send_telegram.py "$file"
+            sleep 1
+          done < changed.txt
