@@ -119,7 +119,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.exception("Unhandled Telegram error", exc_info=context.error)
 
 
- def main() -> None:
+def main() -> None:
     application = Application.builder().token(get_token()).build()
 
     application.add_handler(CommandHandler("start", start))
